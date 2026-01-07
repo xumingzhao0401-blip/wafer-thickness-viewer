@@ -1,11 +1,11 @@
 # -*- coding: utf-8 -*-
 """
-Wafer Thickness Viewer (Streamlit) - Dataset Manager Version
+Wafer Thickness Viewer (Streamlit) - Dataset Manager + True 3D (Z scale) Version
 
-改进点（解决“CSV 与生成器数据冲突”）：
-1) 引入「数据集管理器」：每片晶圆数据都作为一个 dataset（有名字）存入 st.session_state.datasets
-2) 普通模式通过下拉框选择当前显示的数据集；CSV 导入 / 生成器保存都只会“新增数据集”，不会覆盖彼此
-3) 保留你原有逻辑：缓存、统计、3D 视角控制、标签开关、生成器预览图、下载模板等
+新增：
+- 3D 视图增加「Z 方向夸张倍数」滑条（仅影响显示，不改变真实厚度数值/统计）
+- 3D hover 仍显示真实厚度（未放大）
+- 保留你原有逻辑：缓存、统计、3D 视角控制、标签开关、生成器预览图、下载模板、数据集管理等
 """
 
 from __future__ import annotations
@@ -22,13 +22,13 @@ import streamlit as st
 # Page config
 # -----------------------------
 st.set_page_config(
-    page_title="晶圆厚度可视化",
+    page_title="晶圆厚度 3D 可视化",
     page_icon="🟢",
     layout="wide",
 )
 
 # ============================================================
-# Dataset Manager (NEW)
+# Dataset Manager
 # ============================================================
 
 def _init_dataset_store():
@@ -320,12 +320,18 @@ def make_3d_surface(
     spec_upper: Optional[float],
     spec_lower: Optional[float],
     camera_eye: Optional[Tuple[float, float, float]] = None,
+    z_scale: float = 1.0,         # NEW: Z 方向夸张倍数（只影响显示）
+    z_aspect: float = 2.0,        # NEW: 视觉纵向比例（只影响显示）
 ) -> go.Figure:
     xs = df["x"].to_numpy(dtype=float)
     ys = df["y"].to_numpy(dtype=float)
     ts = df["thickness"].to_numpy(dtype=float)
 
     grid_x, grid_y, grid_t = cached_idw_interpolation(xs, ys, ts, radius_mm, grid_res)
+
+    # 显示用 Z（放大）；真实值保留在 customdata 里用于 hover
+    grid_z = None if grid_t is None else (grid_t * float(z_scale))
+    pts_z = ts * float(z_scale)
 
     fig = go.Figure()
 
@@ -334,64 +340,61 @@ def make_3d_surface(
             go.Surface(
                 x=grid_x,
                 y=grid_y,
-                z=grid_t,
+                z=grid_z,                 # 显示用（放大）
+                surfacecolor=grid_t,      # 颜色仍按真实厚度
                 colorscale=cmap,
                 colorbar=dict(title="Thickness", thickness=18, len=0.85),
-                hovertemplate="X=%{x:.2f}<br>Y=%{y:.2f}<br>T=%{z:.4f}<extra></extra>",
+                customdata=grid_t,        # hover 显示真实厚度
+                hovertemplate="X=%{x:.2f}<br>Y=%{y:.2f}<br>T=%{customdata:.4f}<extra></extra>",
             )
         )
-        mask = ~np.isnan(grid_t)
 
+        mask = ~np.isnan(grid_t)
         if spec_upper is not None and np.isfinite(spec_upper):
-            z_up = np.where(mask, spec_upper, np.nan)
+            z_up = np.where(mask, float(spec_upper) * float(z_scale), np.nan)
             fig.add_trace(
                 go.Surface(
-                    x=grid_x,
-                    y=grid_y,
-                    z=z_up,
-                    opacity=0.25,
-                    showscale=False,
-                    name="USL",
+                    x=grid_x, y=grid_y, z=z_up,
+                    opacity=0.25, showscale=False, name="USL",
                     colorscale=[[0, "red"], [1, "red"]],
+                    hoverinfo="skip",
                 )
             )
         if spec_lower is not None and np.isfinite(spec_lower):
-            z_lo = np.where(mask, spec_lower, np.nan)
+            z_lo = np.where(mask, float(spec_lower) * float(z_scale), np.nan)
             fig.add_trace(
                 go.Surface(
-                    x=grid_x,
-                    y=grid_y,
-                    z=z_lo,
-                    opacity=0.25,
-                    showscale=False,
-                    name="LSL",
+                    x=grid_x, y=grid_y, z=z_lo,
+                    opacity=0.25, showscale=False, name="LSL",
                     colorscale=[[0, "red"], [1, "red"]],
+                    hoverinfo="skip",
                 )
             )
 
     fig.add_trace(
         go.Scatter3d(
-            x=xs,
-            y=ys,
-            z=ts,
+            x=xs, y=ys, z=pts_z,          # 显示用（放大）
             mode="markers",
             marker=dict(size=4, color="black"),
             name="量测点",
+            customdata=ts,               # hover 显示真实厚度
+            hovertemplate="X=%{x:.2f}<br>Y=%{y:.2f}<br>T=%{customdata:.4f}<extra></extra>",
         )
     )
 
     scene = dict(
         xaxis_title="X (mm)",
         yaxis_title="Y (mm)",
-        zaxis_title="Thickness",
-        aspectmode="data",
+        zaxis_title=f"Thickness × {z_scale:g} (display)",
+        aspectmode="manual",
+        aspectratio=dict(x=1, y=1, z=float(z_aspect)),
         domain=dict(x=[0.0, 1.0], y=[0.0, 1.0]),
     )
     if camera_eye is not None:
         scene["camera"] = dict(eye=dict(x=camera_eye[0], y=camera_eye[1], z=camera_eye[2]))
 
     fig.update_layout(
-        title="Wafer Thickness 3D Distribution",
+        title="Wafer Thickness 3D Distribution (Z scaled for display)",
         scene=scene,
         margin=dict(l=0, r=0, t=50, b=0),
         height=900,
@@ -400,7 +403,7 @@ def make_3d_surface(
 
 
 # ============================================================
-# New Function: Pattern Preview Plot
+# Pattern Preview Plot
 # ============================================================
 
 def plot_pattern_preview(df: pd.DataFrame, radius_mm: float) -> go.Figure:
@@ -444,7 +447,7 @@ def plot_pattern_preview(df: pd.DataFrame, radius_mm: float) -> go.Figure:
 
 
 # ============================================================
-# Logic: Generator
+# Generator
 # ============================================================
 
 def generate_pattern_coords(pattern_type, radius_mm, edge_exclude_mm, **kwargs) -> List[Tuple[float, float]]:
@@ -648,7 +651,6 @@ def normal_mode_ui():
             st.info("请先选择/创建一个数据集。")
             return
 
-        # defaults from dataset meta
         wafer_inch_default = ds.get("wafer_inch", 8)
         cmap_default = ds.get("cmap", "viridis")
         spec_up_default = "" if ds.get("spec_upper") is None else str(ds.get("spec_upper"))
@@ -685,7 +687,6 @@ def normal_mode_ui():
         spec_upper = _parse(spec_upper_txt)
         spec_lower = _parse(spec_lower_txt)
 
-        # write back to dataset meta (each dataset remembers its own)
         ds["wafer_inch"] = wafer_inch
         ds["cmap"] = cmap
         ds["spec_upper"] = spec_upper
@@ -718,17 +719,35 @@ def normal_mode_ui():
         st.plotly_chart(top_fig, use_container_width=True, key="top_view_fig")
 
     st.markdown("---")
-    st.markdown("### 3D 视图")
+    st.markdown("### 3D 视图（真实起伏：可调 Z 夸张倍数）")
 
     c1, c2, c3 = st.columns([1, 2, 1])
     with c2:
-        cam_box = st.expander("视角（可选）", expanded=False)
+        cam_box = st.expander("视角与 3D 显示设置（可选）", expanded=False)
         with cam_box:
             eye_cols = st.columns(3)
             eye_x = eye_cols[0].slider("eye.x", -3.0, 3.0, 1.7, 0.1, key="eye_x")
             eye_y = eye_cols[1].slider("eye.y", -3.0, 3.0, 1.7, 0.1, key="eye_y")
             eye_z = eye_cols[2].slider("eye.z", 0.1, 5.0, 1.2, 0.1, key="eye_z")
             camera = (eye_x, eye_y, eye_z)
+
+            st.markdown("---")
+            z_scale = st.slider(
+                "Z 方向夸张倍数（仅影响显示）",
+                min_value=1.0,
+                max_value=500.0,
+                value=80.0,
+                step=1.0,
+                key="z_scale",
+            )
+            z_aspect = st.slider(
+                "纵向视觉比例（仅影响显示）",
+                min_value=0.2,
+                max_value=10.0,
+                value=2.5,
+                step=0.1,
+                key="z_aspect",
+            )
 
         fig3d = make_3d_surface(
             df,
@@ -738,6 +757,8 @@ def normal_mode_ui():
             spec_upper=spec_upper,
             spec_lower=spec_lower,
             camera_eye=camera,
+            z_scale=z_scale,
+            z_aspect=z_aspect,
         )
         st.plotly_chart(fig3d, use_container_width=True, key="surface3d")
 
@@ -747,7 +768,7 @@ def normal_mode_ui():
 # ============================================================
 
 def main():
-    st.title("晶圆厚度可视化")
+    st.title("晶圆厚度 3D 可视化（专业版）")
 
     tab_normal, tab_gen = st.tabs(["📊 普通模式 (Analysis)", "🛠️ 坐标生成器 (Generator)"])
 
@@ -760,3 +781,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+
