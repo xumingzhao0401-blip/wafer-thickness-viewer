@@ -529,7 +529,7 @@ def generate_pattern_coords(pattern_type, radius_mm, edge_exclude_mm, **kwargs) 
         layout_sorted = sorted(layout, key=lambda t: t[0])
         point_id = [pid for pid, _, _ in layout_sorted]
         points = [(float(x), float(y)) for _, x, y in layout_sorted]
-df = pd.DataFrame(points, columns=["x", "y"])
+    df = pd.DataFrame(points, columns=["x", "y"])
     if point_id is not None:
         df.insert(0, "point_id", point_id)
     else:
