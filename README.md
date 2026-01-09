@@ -1,5 +1,5 @@
 # Wafer Thickness Viewer (Streamlit)
-# https://wafer-thickness-viewer-kvmt9y6rqvbyjr8kawbanh.streamlit.app/
+# https://wafer-thickness-viewer.streamlit.app/
 
 一个用于晶圆厚度数据的 2D 顶视图 + 3D 曲面可视化工具，支持：
 - CSV 导入
